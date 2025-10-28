@@ -1,142 +1,216 @@
 // src/etl.js
+//
+// 1. Читает исходные CSV из папки data/
+//    - SalesAnalyticks.csv (продажи)
+//    - Managers.csv        (менеджеры)
+//    - Price.csv           (цены)
+// 2. Очищает и объединяет данные
+// 3. Создаёт data/FinalTable.csv — нормализованную таблицу "Продажи"
+//
+// Запуск: node src/etl.js
 
-// ---------- Шаг 1. Функции очистки ----------
+const fs = require("fs");
+const path = require("path");
 
-// "31-03-2025" -> "31.03.2025"
+// ==== Утилиты очистки ====
+
 function normalizeDate(raw) {
+  if (!raw) return "";
   const cleaned = raw.trim();
-  const parts = cleaned.split(/[-\/.]/); // разбиваем по -, / или .
-  const dd = parts[0].padStart(2, "0");
-  const mm = parts[1].padStart(2, "0");
-  const yyyy = parts[2];
-  return dd + "." + mm + "." + yyyy; // формат DD.MM.YYYY
+  const parts = cleaned.split(/[-\/.]/); // допускаем "-", "/", "."
+  const dd = parts[0] ? parts[0].padStart(2, "0") : "";
+  const mm = parts[1] ? parts[1].padStart(2, "0") : "";
+  const yyyy = parts[2] || "";
+  return dd + "." + mm + "." + yyyy; // формируем DD.MM.YYYY
 }
 
-// "12 шт" -> 12 , "150,00 руб" -> 150
 function normalizeNumber(raw) {
+  if (raw === undefined || raw === null) return 0;
   const cleaned = raw
     .toString()
     .trim()
-    .replace(",", ".") // запятая -> точка
-    .replace(/[^0-9.]/g, ""); // убираем всё лишнее, кроме цифр и точки
+    .replace(",", ".")
+    .replace(/\s+/g, "")
+    .replace(/[^0-9.]/g, "");
   if (cleaned === "") return 0;
-  return parseFloat(cleaned);
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num;
 }
 
-// "   иВАНОВ    ИВАН  " -> "Иванов И."
 function normalizeManagerName(raw) {
-  const trimmed = raw.replace(/\s+/g, " ").trim().toLowerCase();
-  const parts = trimmed.split(" "); // ["иванов","иван"]
+  if (!raw) return "";
+  const trimmed = raw.replace(/\s+/g, " ").trim().toLowerCase(); // "иванов иван"
+  const parts = trimmed.split(" ");
   const surname = parts[0] || "";
   const name = parts[1] || "";
+
   if (!surname && !name) return "";
 
-  const surnameCap = surname[0].toUpperCase() + surname.slice(1);
+  const surnameCap =
+    surname.length > 0 ? surname[0].toUpperCase() + surname.slice(1) : "";
   const initial = name ? name[0].toUpperCase() + "." : "";
-  return surnameCap + " " + initial; // "Иванов И."
+
+  return (surnameCap + " " + initial).trim(); // "Иванов И."
 }
 
-// вспомогательное округление до 2 знаков для денег
 function round2(x) {
   return Math.round(x * 100) / 100;
 }
 
-// делаем тег для месяца: из "31.03.2025" -> "03.2025"
 function makeMonthTag(dateStr) {
   const [dd, mm, yyyy] = dateStr.split(".");
-  return mm + "." + yyyy;
+  if (!mm || !yyyy) return "";
+  return mm + "." + yyyy; // "03.2025"
 }
 
-// ---------- Шаг 2. Главная функция сборки ----------
-// Она принимает "сырые" данные (из файлов) и возвращает чистые строки.
+// ==== Чтение CSV (с разделителем ;) ====
 
-function buildFinalTable(salesRaw, managersRaw, pricesRaw) {
-  // создаём быстрые словари (карты соответствий)
+function readCsvSemicolon(filePath) {
+  const csvText = fs.readFileSync(filePath, "utf8");
 
-  // по ID заказа -> менеджер, город
+  const lines = csvText.split(/\r?\n/).filter((line) => line.trim() !== "");
+
+  if (lines.length === 0) {
+    return { headers: [], rows: [] };
+  }
+
+  const headers = lines[0].split(";").map((h) => h.trim());
+
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(";");
+    const obj = {};
+    for (let c = 0; c < headers.length; c++) {
+      const key = headers[c];
+      const val = cols[c] !== undefined ? cols[c].trim() : "";
+      obj[key] = val;
+    }
+    rows.push(obj);
+  }
+
+  return { headers, rows };
+}
+
+// ==== Объединение данных в таблицу "Продажи" ====
+
+function buildFinalTable(salesRows, managerRows, priceRows) {
+  // словарь: ID заказа -> {manager, city}
   const managerByOrder = {};
-  for (let m of managersRaw) {
-    managerByOrder[m.orderId] = {
-      manager: normalizeManagerName(m.manager),
-      city: m.city ? m.city.trim() : "",
+  for (const row of managerRows) {
+    const orderId = row["ID заказа"];
+    const managerName = row["Менеджер"];
+    const city = row["Город"];
+    managerByOrder[orderId] = {
+      manager: normalizeManagerName(managerName),
+      city: city ? city.trim() : "",
     };
   }
 
-  // по продукту -> цена
+  // словарь: Продукт -> Цена
   const priceByProduct = {};
-  for (let p of pricesRaw) {
-    priceByProduct[p.product] = normalizeNumber(p.price);
+  for (const row of priceRows) {
+    const productName = row["Продукт"];
+    const rawPrice =
+      row["Цена за г/мл, руб."] || row["Цена"] || row["Цена, руб."] || "";
+    priceByProduct[productName] = normalizeNumber(rawPrice);
   }
 
-  // идём по продажам
+  // собираем финальную таблицу
   const finalTable = [];
 
-  for (let sale of salesRaw) {
-    const cleanDate = normalizeDate(sale.date); // "31.03.2025"
-    const qtyNum = normalizeNumber(sale.qty); // "12 шт" -> 12
-    const unitPrice = priceByProduct[sale.product] || 0;
+  for (const sale of salesRows) {
+    const orderId = sale["ID заказа"];
+    const rawDate = sale["Дата"];
+    const product = sale["Продукт"];
+    const rawQty = sale["Количество"];
+
+    const cleanDate = normalizeDate(rawDate); // "31.03.2025"
+    const qtyNum = normalizeNumber(rawQty); // "12 шт" -> 12
+    const unitPrice = priceByProduct[product] || 0;
     const sum = qtyNum * unitPrice;
 
-    const mInfo = managerByOrder[sale.orderId] || { manager: "", city: "" };
+    const mgr = managerByOrder[orderId] || { manager: "", city: "" };
 
     finalTable.push({
-      date: cleanDate, // "31.03.2025"
-      month: makeMonthTag(cleanDate), // "03.2025"
-      manager: mInfo.manager, // "Иванов И."
-      city: mInfo.city, // "Москва"
-      product: sale.product, // "Латте"
-      qty: qtyNum, // 12
-      price: unitPrice, // 150
-      sum: round2(sum), // 1800
+      date: cleanDate,
+      month: makeMonthTag(cleanDate),
+      manager: mgr.manager,
+      city: mgr.city,
+      product: product,
+      qty: qtyNum,
+      price: unitPrice,
+      sum: round2(sum),
     });
   }
 
   return finalTable;
 }
 
-// ---------- Шаг 3. Пример использования ----------
-// Это просто пример. Его можно удалить потом.
-// Здесь мы делаем фейковые данные, как будто они пришли из CSV.
+// ==== Сохранение результата в CSV ====
 
-function example() {
-  const salesRaw = [
-    {
-      orderId: "101",
-      date: "31-03-2025",
-      product: "Латте",
-      qty: "12 шт",
-      buyType: "Онлайн",
-      payType: "Карта",
-    },
-    {
-      orderId: "102",
-      date: "01-04-2025",
-      product: "Эспрессо",
-      qty: "5",
-      buyType: "Оффлайн",
-      payType: "Наличные",
-    },
+function saveFinalTableAsCsv(finalTable, outPath) {
+  const headers = [
+    "Дата",
+    "Месяц",
+    "Менеджер",
+    "Город",
+    "Товар",
+    "Кол-во",
+    "Цена",
+    "Сумма",
   ];
 
-  const managersRaw = [
-    { orderId: "101", manager: "   иВАНОВ    ИВАН  ", city: "Москва" },
-    { orderId: "102", manager: "Петров П.", city: "Санкт-Петербург" },
-  ];
+  const lines = [];
+  lines.push(headers.join(";"));
 
-  const pricesRaw = [
-    { product: "Латте", price: "150,00 руб" },
-    { product: "Эспрессо", price: "120 руб" },
-  ];
+  for (const row of finalTable) {
+    const line = [
+      row.date,
+      row.month,
+      row.manager,
+      row.city,
+      row.product,
+      row.qty,
+      row.price,
+      row.sum,
+    ].join(";");
+    lines.push(line);
+  }
 
-  const table = buildFinalTable(salesRaw, managersRaw, pricesRaw);
-  console.log(table);
+  fs.writeFileSync(outPath, lines.join("\n"), "utf8");
+  console.log("Файл сохранён:", outPath);
 }
 
-// раскомментировать, если хочешь протестировать в обычном node.js
-// example();
+// ==== Точка запуска ====
 
-// Экспортируем функции — это пригодится для других файлов (например, r7-macro.js)
+function runLocalETL() {
+  const salesPath = path.join(__dirname, "..", "data", "SalesAnalyticks.csv");
+  const managersPath = path.join(__dirname, "..", "data", "Managers.csv");
+  const pricesPath = path.join(__dirname, "..", "data", "Price.csv");
+
+  const salesCsv = readCsvSemicolon(salesPath);
+  const managersCsv = readCsvSemicolon(managersPath);
+  const pricesCsv = readCsvSemicolon(pricesPath);
+
+  const finalTable = buildFinalTable(
+    salesCsv.rows,
+    managersCsv.rows,
+    pricesCsv.rows
+  );
+
+  console.log("Пример данных:", finalTable.slice(0, 5));
+  const outPath = path.join(__dirname, "..", "data", "FinalTable.csv");
+  saveFinalTableAsCsv(finalTable, outPath);
+}
+
+// запускаем, когда файл вызывается напрямую через node
+if (require.main === module) {
+  runLocalETL();
+}
+
+// экспорт для использования из других файлов (если нужно)
 module.exports = {
+  runLocalETL,
   buildFinalTable,
   normalizeDate,
   normalizeNumber,

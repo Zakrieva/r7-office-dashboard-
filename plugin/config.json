@@ -1,0 +1,9 @@
+{
+  "name": "Sales Dashboard Builder",
+  "guid": "sales-dashboard-plugin-001",
+  "version": "1.0.0",
+  "description": "Импорт очищенных продаж и построение дашборда KPI в табличном редакторе.",
+  "editor": "spreadsheet",
+  "isViewer": false,
+  "init": "index.html"
+}

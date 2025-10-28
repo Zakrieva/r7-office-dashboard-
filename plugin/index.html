@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Дашборд продаж</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        padding: 16px;
+        line-height: 1.4;
+      }
+      h2 {
+        margin-top: 0;
+        font-size: 16px;
+      }
+      button {
+        display: block;
+        width: 100%;
+        margin: 8px 0;
+        padding: 10px 12px;
+        border: 0;
+        border-radius: 6px;
+        font-size: 14px;
+        cursor: pointer;
+        background: #2d6cdf;
+        color: #fff;
+        font-weight: 500;
+      }
+      button:active {
+        opacity: 0.9;
+      }
+      .hint {
+        font-size: 12px;
+        color: #666;
+        margin-top: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Дашборд продаж</h2>
+
+    <p>
+      <strong>Шаг 1.</strong> Импортировать очищенные данные продаж
+      (FinalTable.csv) в книгу:
+    </p>
+    <button id="btnImport">Импортировать данные в лист "Продажи"</button>
+
+    <p><strong>Шаг 2.</strong> Построить аналитический дашборд:</p>
+    <button id="btnDashboard">Построить лист "Дашборд"</button>
+
+    <div class="hint">
+      После выполнения:
+      <ul>
+        <li>Лист "Продажи" — все строки продаж</li>
+        <li>
+          Лист "Дашборд" — KPI, продажи по месяцам, топ менеджеров, детализация
+        </li>
+      </ul>
+    </div>
+
+    <script src="plugin.js"></script>
+  </body>
+</html>
